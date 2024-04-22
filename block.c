@@ -25,13 +25,13 @@ int diskfile = -1;
 //Creates a file which is your new emulated disk
 void dev_init(const char* diskfile_path) {
     if (diskfile >= 0) {
-		return;
+		  return;
     }
     
     diskfile = open(diskfile_path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
     if (diskfile < 0) {
-		perror("disk_open failed");
-		exit(EXIT_FAILURE);
+      perror("disk_open failed");
+      exit(EXIT_FAILURE);
     }
 	
     ftruncate(diskfile, DISK_SIZE);
