@@ -174,14 +174,16 @@ int rufs_mkfs() {
 	.d_start_blk = inum_block_count + 3 }; //finally by the datablocks
 
 	sb = new_sb;
+	memcpy(&sb,bmp,sizeof(struct superblock));
 	bio_write(0,&sb);
+
 	// initialize inode bitmap
 	memset(bmp,0,BLOCK_SIZE);
-	bio_write(1,bmp);
+	bio_write(sb.i_bitmap_blk,bmp);
 	// initialize data block bitmap
 	for(int i = 0; i < inum_block_count + sb.i_start_blk; i++)	
 		set_bitmap(bmp,i); //Mark these data blocks as reserved for filesystem metadata (superblock, bitmaps, inodes)
-	bio_write(2,bmp);
+	bio_write(sb.d_bitmap_blk,bmp);
 	// update bitmap information for root directory
 
 	// update inode for root directory
@@ -193,14 +195,16 @@ int rufs_mkfs() {
  * FUSE file operations
  */
 static void *rufs_init(struct fuse_conn_info *conn) {
-	bmp = malloc(BLOCK_SIZE);
+	bmp = calloc(0,BLOCK_SIZE);
 	// Step 1a: If disk file is not found, call mkfs
 	if(dev_open(diskfile_path) != 0)
 		rufs_mkfs();
   // Step 1b: If disk file is found, just initialize in-memory data structures
   // and read superblock from disk
-	else
-		bio_read(0,&sb);
+	else {
+		bio_read(0,bmp);
+		memcpy(&sb,bmp,sizeof(struct superblock));
+	}
 	return NULL;
 }
 
