@@ -55,42 +55,47 @@ int get_avail_blkno() {
 
 	// Step 1: Read data block bitmap from disk
 	bio_read(sb.d_bitmap_blk,&bmp);
-	int dbno = 0; // stores next availaible data block, if none exist it is 0	
+	int blkno = 0; // stores next availaible data block, if none exist it is 0	
 	// Step 2: Traverse data block bitmap to find an available slot
 	for(int i = 0; i < sb.max_dnum; i++)
 		if(get_bitmap(bmp,i)) {
-			dbno = i;
+			blkno = i;
 		}
 	// Step 3: Update data block bitmap and write to disk 
-	if(dbno != 0) {
-		set_bitmap(bmp,dbno);
+	if(blkno != 0) {
+		set_bitmap(bmp,blkno);
 		bio_write(sb.i_bitmap_blk,bmp);	
 	}
-	return dbno;
+	return blkno;
 }
 
 /* 
  * inode operations
  */
 int readi(uint16_t ino, struct inode *inode) {
-
+	if(ino > sb.max_inum)
+		return -1;
   // Step 1: Get the inode's on-disk block number
-
+	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE;
   // Step 2: Get offset of the inode in the inode on-disk block
-
+	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
   // Step 3: Read the block from disk and then copy into inode structure
-
+	bio_read(blkno + sb.i_start_blk,bmp);
+	memcpy(inode,bmp[offset],sizeof(struct inode));
 	return 0;
 }
 
 int writei(uint16_t ino, struct inode *inode) {
-
+	if(ino > sb.max_inum)
+		return -1;
 	// Step 1: Get the block number where this inode resides on disk
-	
+	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE;
 	// Step 2: Get the offset in the block where this inode resides on disk
-
+	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
 	// Step 3: Write inode to disk 
-
+	bio_read(blkno + sb.i_start_blk,bmp);
+	memcpy(&bmp[offset],inode,sizeof(struct inode));
+	bio_write(blkno + sb.i_start_blk,bmp);
 	return 0;
 }
 
@@ -174,8 +179,8 @@ int rufs_mkfs() {
 	memset(bmp,0,BLOCK_SIZE);
 	bio_write(1,bmp);
 	// initialize data block bitmap
-	for(int i = 0; i < inum_block_count + 3; i++)	
-		set_bitmap(bmp,i); //Mark these data blocks as reserved for filesystem data
+	for(int i = 0; i < inum_block_count + sb.i_start_blk; i++)	
+		set_bitmap(bmp,i); //Mark these data blocks as reserved for filesystem metadata (superblock, bitmaps, inodes)
 	bio_write(2,bmp);
 	// update bitmap information for root directory
 
