@@ -45,7 +45,7 @@ int get_avail_ino() {
 		set_bitmap(bmp,ino);		
 		bio_write(sb.i_bitmap_blk,bmp);
 	}
-	return 0;
+	return ino
 }
 
 /* 
@@ -66,7 +66,7 @@ int get_avail_blkno() {
 		set_bitmap(bmp,dbno);
 		bio_write(sb.i_bitmap_blk,bmp);	
 	}
-	return 0;
+	return dbno;
 }
 
 /* 
