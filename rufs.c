@@ -29,19 +29,20 @@ struct superblock sb; // stores superblock metadata read during init
 bitmap_t bmp; // bitmap of size BLOCK_SIZE used with bio_read/write operations
 /* 
  * Get available inode number from bitmap
+ * Returns -1 if none found
  */
 int get_avail_ino() {
 
 	// Step 1: Read inode bitmap from disk
 	bio_read(sb.i_bitmap_blk,&bmp);
-	int ino = 0; // stores next availaible inode number, if none exist it is 0
+	int ino = -1; // stores next availaible inode number, if none exist it is 0
 	// Step 2: Traverse inode bitmap to find an available slot
 	for(int i = 0; i < sb.max_inum; i++)
 		if(get_bitmap(bmp,i)) {
 			ino = i;
 		}
 	// Step 3: Update inode bitmap and write to disk 
-	if(ino != 0) {
+	if(ino != -1) {
 		set_bitmap(bmp,ino);		
 		bio_write(sb.i_bitmap_blk,bmp);
 	}
@@ -50,21 +51,24 @@ int get_avail_ino() {
 
 /* 
  * Get available data block number from bitmap
+ * Returns -1 if none found
  */
 int get_avail_blkno() {
 
 	// Step 1: Read data block bitmap from disk
-	bio_read(sb.d_bitmap_blk,&bmp);
-	int blkno = 0; // stores next availaible data block, if none exist it is 0	
+	if(bio_read(sb.d_bitmap_blk,&bmp))
+		return -1;
+	int blkno = -1; // stores next availaible data block, if none exist it is 0	
 	// Step 2: Traverse data block bitmap to find an available slot
 	for(int i = 0; i < sb.max_dnum; i++)
 		if(get_bitmap(bmp,i)) {
 			blkno = i;
 		}
 	// Step 3: Update data block bitmap and write to disk 
-	if(blkno != 0) {
+	if(blkno != -1) {
 		set_bitmap(bmp,blkno);
-		bio_write(sb.i_bitmap_blk,bmp);	
+		if(bio_write(sb.i_bitmap_blk,bmp) <= 0)
+			return -1;
 	}
 	return blkno;
 }
@@ -74,28 +78,31 @@ int get_avail_blkno() {
  */
 int readi(uint16_t ino, struct inode *inode) {
 	if(ino > sb.max_inum)
-		return -1;
+		return 1;
   // Step 1: Get the inode's on-disk block number
 	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE + sb.i_start_blk;
   // Step 2: Get offset of the inode in the inode on-disk block
 	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
   // Step 3: Read the block from disk and then copy into inode structure
-	bio_read(blkno,bmp);
+	if(bio_read(blkno,bmp) <= 0)
+		return EIO;
 	memcpy(inode,bmp[offset],sizeof(struct inode));
 	return 0;
 }
 
 int writei(uint16_t ino, struct inode *inode) {
 	if(ino > sb.max_inum)
-		return -1;
+		return 1;
 	// Step 1: Get the block number where this inode resides on disk
 	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE + sb.i_start_blk;
 	// Step 2: Get the offset in the block where this inode resides on disk
 	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
 	// Step 3: Write inode to disk 
-	bio_read(blkno,bmp);
+	if(bio_read(blkno,bmp) <= 0)
+		return EIO;
 	memcpy(&bmp[offset],inode,sizeof(struct inode));
-	bio_write(blkno,bmp);
+	if(bio_write(blkno,bmp) <= 0)
+		return EIO;
 	return 0;
 }
 
@@ -107,21 +114,18 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 
 	// Step 1: Call readi() to get the inode using ino (inode number of current directory)
 	struct inode dir_inode;
-	if (readi(ino, &dir_inode) != 0) {
+	if (readi(ino, &dir_inode) != 0)
 		return EIO; // error: failed to read inode
-	}
 	
 	// iterate through all direct pointers
 	for (int i = 0; i < 16; i++) {
 		int data_block_idx = dir_inode.direct_ptr[i];
-		if (data_block_idx == 0) {
+		if (data_block_idx == 0)
 			break; //no data blocks left to search
-		}
 
 		// Step 2: Read directory's data block and check each directory entry.
-		if (bio_read(data_block_idx, bmp) <= 0) {
+		if (bio_read(data_block_idx, bmp) <= 0)
 			return EIO; // error: failed to read directory data block
-		}
 
 		// iterate through directory entries in the data block
 		int offset = 0;
@@ -187,13 +191,14 @@ int rufs_mkfs() {
 	// write superblock information
 	const unsigned int inum_block_count = (MAX_INUM * sizeof(struct inode)) / BLOCK_SIZE; // num of blocks needed for inodes
 	struct superblock new_sb = { 
-	.magic_num = MAGIC_NUM, 
-	.max_inum = MAX_INUM,
-	.max_dnum = MAX_DNUM - (inum_block_count + 3), // 3 represents the bitmaps and superblock stored before inodes
-	.i_bitmap_blk = 1, //0 is superblock, followed by inode bitmap
-	.d_start_blk = 2, //then datablock bitmap
-	.i_start_blk = 3, //then the inodes themselves
-	.d_start_blk = inum_block_count + 3 }; //finally by the datablocks
+		.magic_num = MAGIC_NUM, 
+		.max_inum = MAX_INUM,
+		.max_dnum = MAX_DNUM - (inum_block_count + 3), // 3 represents the bitmaps and superblock stored before inodes
+		.i_bitmap_blk = 1, //0 is superblock, followed by inode bitmap
+		.d_start_blk = 2, //then datablock bitmap
+		.i_start_blk = 3, //then the inodes themselves
+		.d_start_blk = inum_block_count + 3 //finally by the datablocks
+	}; 
 
 	sb = new_sb;
 	memcpy(&sb,bmp,sizeof(struct superblock));
@@ -209,15 +214,25 @@ int rufs_mkfs() {
 	if(bio_write(sb.d_bitmap_blk,bmp))
 		return 1;
 	// update inode for root directory
-	memset(bmp,0,BLOCK_SIZE);
 	struct inode root = { 0 };
 	root.ino = get_avail_ino();
 	root.direct_ptr[0] = get_avail_blkno();
+	if(root.ino == -1 || root.direct_ptr[0] == -1)
+		return 1;
 	root.type = S_ISDIR;
 	root.vstat.st_mtime = time(NULL);
 	root.size = BLOCK_SIZE;
 	root.valid = 1;
-	memcpy(bmp,&root,sizeof(struct inode));
+	int err = writei(root.ino,&root);
+	if(err)
+		return err;
+	struct dirent blank = {.ino = 0, .len = 0, .name = "", .valid = 0};
+	for(unsigned int offset = 0; offset < BLOCK_SIZE; offset += sizeof(struct dirent)) { //initialize root directory datablock
+		if((offset + sizeof(struct dirent)) < BLOCK_SIZE) 
+			memcpy(bmp + offset,&blank,sizeof(struct dirent));
+	}
+	if(bio_write(root.direct_ptr[0],bmp) <= 0)
+		return 1;
 	return 0;
 }
 
@@ -228,12 +243,14 @@ int rufs_mkfs() {
 static void *rufs_init(struct fuse_conn_info *conn) {
 	bmp = calloc(0,BLOCK_SIZE);
 	// Step 1a: If disk file is not found, call mkfs
-	if(dev_open(diskfile_path) != 0)
-		rufs_mkfs();
-  // Step 1b: If disk file is found, just initialize in-memory data structures
-  // and read superblock from disk
-	else {
-		bio_read(0,bmp);
+	if(dev_open(diskfile_path) != 0) {
+		int err = rufs_mkfs();
+		if(err)
+			exit(err); //error making file system, exit
+	} else { 
+		// Step 1b: If disk file is found, just initialize in-memory data structures
+		if(bio_read(0,bmp) <= 0) // and read superblock from disk
+			exit(EXIT_FAILURE); // error reading, just EXIT
 		memcpy(&sb,bmp,sizeof(struct superblock));
 	}
 	return NULL;
