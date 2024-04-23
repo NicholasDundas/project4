@@ -121,7 +121,7 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 	for (int i = 0; i < 16; i++) {
 		int data_block_idx = dir_inode.direct_ptr[i];
 		if (data_block_idx == 0)
-			break; //no data blocks left to search
+			continue; //empty direct_ptr, do not search
 
 		// Step 2: Read directory's data block and check each directory entry.
 		if (bio_read(data_block_idx, bmp) <= 0)
