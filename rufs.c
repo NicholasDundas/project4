@@ -143,18 +143,59 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
 
-	// Step 1: Read dir_inode's data block and check each directory entry of dir_inode
-	
-	// Step 2: Check if fname (directory name) is already used in other entries
+	int	empty_dptr = -1; //first empty direct pointer found
+	int empty_dir_ent_block = -1; //first empty direct entry block
+	int empty_dir_ent = -1; //first empty direct entry
+	for (int i = 0; i < 16; i++) {
+		int data_block_idx = dir_inode.direct_ptr[i];
+		if (data_block_idx == 0) {
+			if(empty_dir_ent_block == -1 && empty_dptr == -1) 
+				empty_dptr = i; //empty direct_ptr, do not search
+			continue;
+		}
+		// Step 1: Read dir_inode's data block and check each directory entry of dir_inode
+		if (bio_read(data_block_idx, bmp) <= 0)
+			return EIO; // error: failed to read directory data block
 
+		// iterate through directory entries in the data block
+		int offset = 0;
+		while (offset < BLOCK_SIZE) {
+			struct dirent *dir_entry = (struct dirent *)(bmp + offset);
+			// Step 2: Check if fname (directory name) is already used in other entries
+			if (!dir_entry->valid && empty_dir_ent == -1) { //empty directory entry found, save for later...
+				empty_dir_ent_block = i;
+				empty_dptr = -1; //we dont need to allocate any direct pointers
+				empty_dir_ent = offset;
+			}	
+			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0) { //found duplicate, update f_ino
+				dir_entry->ino = f_ino;
+				bio_write(data_block_idx,bmp);
+				dir_inode.vstat.st_mtime = time(NULL);
+				writei(dir_inode.ino,&dir_inode);
+				return 0;
+			}
+			offset += sizeof(struct dirent);
+		}
+	}
+	if(empty_dir_ent == -1 && empty_dptr == -1)
+		return ENOMEM; //no place to add dirent
 	// Step 3: Add directory entry in dir_inode's data block and write to disk
-
 	// Allocate a new data block for this directory if it does not exist
-
+	if(empty_dptr != -1) {
+		dir_inode.direct_ptr[empty_dptr] = get_avail_blkno();
+		memset(bmp,0,BLOCK_SIZE);
+		empty_dir_ent_block = dir_inode.direct_ptr[empty_dptr];
+		empty_dir_ent = 0;
+	} else {
+		bio_read(empty_dir_ent_block,bmp);
+	}
+	struct dirent dirent = {.ino = f_ino, .len = name_len, .name = "",.valid = 1};
+	strncpy(dirent.name,fname,name_len);
+	memcpy(bmp + empty_dir_ent,&dirent,sizeof(struct dirent)); // Write directory entry into temp block
+	bio_write(empty_dir_ent_block,bmp); // Write temp block to file
 	// Update directory inode
-
-	// Write directory entry
-
+	dir_inode.vstat.st_mtime = time(NULL);
+	writei(dir_inode.ino,&dir_inode);
 	return 0;
 }
 
@@ -226,10 +267,7 @@ int rufs_mkfs() {
 	int err = writei(root.ino,&root);
 	if(err)
 		return err;
-	struct dirent blank = {.ino = 0, .len = 0, .name = "", .valid = 0};
-	for(unsigned int offset = 0; offset + sizeof(struct dirent) < BLOCK_SIZE; offset += sizeof(struct dirent)) { //initialize root directory datablock
-		memcpy(bmp + offset,&blank,sizeof(struct dirent));
-	}
+	memset(bmp,0,BLOCK_SIZE);
 	if(bio_write(root.direct_ptr[0],bmp) <= 0)
 		return 1;
 	return 0;
