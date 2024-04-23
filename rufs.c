@@ -76,11 +76,11 @@ int readi(uint16_t ino, struct inode *inode) {
 	if(ino > sb.max_inum)
 		return -1;
   // Step 1: Get the inode's on-disk block number
-	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE;
+	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE + sb.i_start_blk;
   // Step 2: Get offset of the inode in the inode on-disk block
 	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
   // Step 3: Read the block from disk and then copy into inode structure
-	bio_read(blkno + sb.i_start_blk,bmp);
+	bio_read(blkno,bmp);
 	memcpy(inode,bmp[offset],sizeof(struct inode));
 	return 0;
 }
@@ -89,13 +89,13 @@ int writei(uint16_t ino, struct inode *inode) {
 	if(ino > sb.max_inum)
 		return -1;
 	// Step 1: Get the block number where this inode resides on disk
-	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE;
+	const unsigned int blkno = (ino * sizeof(struct inode)) / BLOCK_SIZE + sb.i_start_blk;
 	// Step 2: Get the offset in the block where this inode resides on disk
 	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
 	// Step 3: Write inode to disk 
-	bio_read(blkno + sb.i_start_blk,bmp);
+	bio_read(blkno,bmp);
 	memcpy(&bmp[offset],inode,sizeof(struct inode));
-	bio_write(blkno + sb.i_start_blk,bmp);
+	bio_write(blkno,bmp);
 	return 0;
 }
 
@@ -107,44 +107,34 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 
 	// Step 1: Call readi() to get the inode using ino (inode number of current directory)
 	struct inode dir_inode;
-	if (readi(ino, &dir_inode) != 0)
-	{
-		return -ENOENT; // error: failed to read inode
+	if (readi(ino, &dir_inode) != 0) {
+		return EIO; // error: failed to read inode
 	}
-
 	
 	// iterate through all direct pointers
-	for (int i = 0; i < 16; i++)
-	{
+	for (int i = 0; i < 16; i++) {
 		int data_block_idx = dir_inode.direct_ptr[i];
-		if (data_block_idx == 0)
-		{
+		if (data_block_idx == 0) {
 			break; //no data blocks left to search
 		}
 
 		// Step 2: Read directory's data block and check each directory entry.
-		char block_data[BLOCK_SIZE];
-		if (bio_read(data_block_idx, block_data) <= 0)
-		{
-			return -EIO; // error: failed to read directory data block
+		if (bio_read(data_block_idx, bmp) <= 0) {
+			return EIO; // error: failed to read directory data block
 		}
 
 		// iterate through directory entries in the data block
 		int offset = 0;
-		while (offset < BLOCK_SIZE)
-		{
-			struct dirent *dir_entry = (struct dirent *)(block_data + offset);
-			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0)
-			{
-				
+		while (offset < BLOCK_SIZE) {
+			struct dirent *dir_entry = (struct dirent *)(bmp + offset);
+			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0) {
 				memcpy(dirent, dir_entry, sizeof(struct dirent));
 				return 0; // return success, found a matching directory entry
 			}
 			offset += sizeof(struct dirent);
 		}
 	}
-
-	return -ENOENT; // if code reaches here, no directory/file was found so return error
+	return ENOENT; // if code reaches here, no directory/file was found so return error
 }
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
@@ -207,18 +197,27 @@ int rufs_mkfs() {
 
 	sb = new_sb;
 	memcpy(&sb,bmp,sizeof(struct superblock));
-	bio_write(0,&sb);
-
+	if(bio_write(0,&sb))
+		return 1;
 	// initialize inode bitmap
 	memset(bmp,0,BLOCK_SIZE);
-	bio_write(sb.i_bitmap_blk,bmp);
+	if(bio_write(sb.i_bitmap_blk,bmp))
+		return 1;
 	// initialize data block bitmap
 	for(int i = 0; i < inum_block_count + sb.i_start_blk; i++)	
 		set_bitmap(bmp,i); //Mark these data blocks as reserved for filesystem metadata (superblock, bitmaps, inodes)
-	bio_write(sb.d_bitmap_blk,bmp);
-	// update bitmap information for root directory
-
+	if(bio_write(sb.d_bitmap_blk,bmp))
+		return 1;
 	// update inode for root directory
+	memset(bmp,0,BLOCK_SIZE);
+	struct inode root = { 0 };
+	root.ino = get_avail_ino();
+	root.direct_ptr[0] = get_avail_blkno();
+	root.type = S_ISDIR;
+	root.vstat.st_mtime = time(NULL);
+	root.size = BLOCK_SIZE;
+	root.valid = 1;
+	memcpy(bmp,&root,sizeof(struct inode));
 	return 0;
 }
 
