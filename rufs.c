@@ -105,14 +105,46 @@ int writei(uint16_t ino, struct inode *inode) {
  */
 int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *dirent) {
 
-  // Step 1: Call readi() to get the inode using ino (inode number of current directory)
+	// Step 1: Call readi() to get the inode using ino (inode number of current directory)
+	struct inode dir_inode;
+	if (readi(ino, &dir_inode) != 0)
+	{
+		return -ENOENT; // error: failed to read inode
+	}
 
-  // Step 2: Get data block of current directory from inode
+	
+	// iterate through all direct pointers
+	for (int i = 0; i < 16; i++)
+	{
+		int data_block_idx = dir_inode.direct_ptr[i];
+		if (data_block_idx == 0)
+		{
+			break; //no data blocks left to search
+		}
 
-  // Step 3: Read directory's data block and check each directory entry.
-  //If the name matches, then copy directory entry to dirent structure
+		// Step 2: Read directory's data block and check each directory entry.
+		char block_data[BLOCK_SIZE];
+		if (bio_read(data_block_idx, block_data) <= 0)
+		{
+			return -EIO; // error: failed to read directory data block
+		}
 
-	return 0;
+		// iterate through directory entries in the data block
+		int offset = 0;
+		while (offset < BLOCK_SIZE)
+		{
+			struct dirent *dir_entry = (struct dirent *)(block_data + offset);
+			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0)
+			{
+				
+				memcpy(dirent, dir_entry, sizeof(struct dirent));
+				return 0; // return success, found a matching directory entry
+			}
+			offset += sizeof(struct dirent);
+		}
+	}
+
+	return -ENOENT; // if code reaches here, no directory/file was found so return error
 }
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
