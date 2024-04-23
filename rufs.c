@@ -169,6 +169,7 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 			}	
 			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0) { //found duplicate, update f_ino
 				dir_entry->ino = f_ino;
+				memcpy(bmp + offset,&dir_entry,sizeof(struct dirent));
 				bio_write(data_block_idx,bmp);
 				dir_inode.vstat.st_mtime = time(NULL);
 				writei(dir_inode.ino,&dir_inode);
