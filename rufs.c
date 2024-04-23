@@ -227,9 +227,8 @@ int rufs_mkfs() {
 	if(err)
 		return err;
 	struct dirent blank = {.ino = 0, .len = 0, .name = "", .valid = 0};
-	for(unsigned int offset = 0; offset < BLOCK_SIZE; offset += sizeof(struct dirent)) { //initialize root directory datablock
-		if((offset + sizeof(struct dirent)) < BLOCK_SIZE) 
-			memcpy(bmp + offset,&blank,sizeof(struct dirent));
+	for(unsigned int offset = 0; offset + sizeof(struct dirent) < BLOCK_SIZE; offset += sizeof(struct dirent)) { //initialize root directory datablock
+		memcpy(bmp + offset,&blank,sizeof(struct dirent));
 	}
 	if(bio_write(root.direct_ptr[0],bmp) <= 0)
 		return 1;
