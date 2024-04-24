@@ -142,16 +142,18 @@ int dir_find(uint16_t ino, const char *fname, size_t name_len, struct dirent *di
 }
 
 int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t name_len) {
-
-	int	empty_dptr = -1; //first empty direct pointer found
-	int empty_dir_ent_block = -1; //first empty direct entry block
+	int need_alloc = 0; //whether we need to allocate a new block
+	int empty_dptr = -1; //first empty direct entry block
 	int empty_dir_ent = -1; //first empty direct entry
+	struct dirent *dir_entry;
 	for (int i = 0; i < 16; i++) {
 		int data_block_idx = dir_inode.direct_ptr[i];
 		if (data_block_idx == 0) {
-			if(empty_dir_ent_block == -1 && empty_dptr == -1) 
-				empty_dptr = i; //empty direct_ptr, do not search
-			continue;
+			if(empty_dir_ent == -1 && empty_dptr == -1)  {
+				empty_dptr = i;
+				need_alloc = 1;
+			}
+			continue; //empty direct_ptr, do not search
 		}
 		// Step 1: Read dir_inode's data block and check each directory entry of dir_inode
 		if (bio_read(data_block_idx, bmp) <= 0)
@@ -160,20 +162,18 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 		// iterate through directory entries in the data block
 		int offset = 0;
 		while (offset < BLOCK_SIZE) {
-			struct dirent *dir_entry = (struct dirent *)(bmp + offset);
+			dir_entry = (struct dirent *)(bmp + offset);
 			// Step 2: Check if fname (directory name) is already used in other entries
 			if (!dir_entry->valid && empty_dir_ent == -1) { //empty directory entry found, save for later...
-				empty_dir_ent_block = i;
-				empty_dptr = -1; //we dont need to allocate any direct pointers
+				empty_dptr = i;
 				empty_dir_ent = offset;
+				need_alloc = 0; //we dont need to allocate any direct pointers (implied in a block)
 			}	
-			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0) { //found duplicate, update f_ino
-				dir_entry->ino = f_ino;
-				memcpy(bmp + offset,&dir_entry,sizeof(struct dirent));
-				bio_write(data_block_idx,bmp);
-				dir_inode.vstat.st_mtime = time(NULL);
-				writei(dir_inode.ino,&dir_inode);
-				return 0;
+			if (dir_entry->valid && strncmp(dir_entry->name, fname, name_len) == 0) { //found duplicate, copy over it
+				empty_dptr = i;
+				empty_dir_ent = offset;
+				need_alloc = 0;
+				goto WRITE_DIRENT;
 			}
 			offset += sizeof(struct dirent);
 		}
@@ -182,18 +182,21 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 		return ENOMEM; //no place to add dirent
 	// Step 3: Add directory entry in dir_inode's data block and write to disk
 	// Allocate a new data block for this directory if it does not exist
-	if(empty_dptr != -1) {
+WRITE_DIRENT:
+	if(need_alloc) { //Allocate new datablock for directory
 		dir_inode.direct_ptr[empty_dptr] = get_avail_blkno();
 		memset(bmp,0,BLOCK_SIZE);
-		empty_dir_ent_block = dir_inode.direct_ptr[empty_dptr];
+		empty_dptr = dir_inode.direct_ptr[empty_dptr];
 		empty_dir_ent = 0;
 	} else {
-		bio_read(empty_dir_ent_block,bmp);
+		bio_read(dir_inode.direct_ptr[empty_dptr],bmp);
 	}
-	struct dirent dirent = {.ino = f_ino, .len = name_len, .name = "",.valid = 1};
-	strncpy(dirent.name,fname,name_len);
-	memcpy(bmp + empty_dir_ent,&dirent,sizeof(struct dirent)); // Write directory entry into temp block
-	bio_write(empty_dir_ent_block,bmp); // Write temp block to file
+	dir_entry = (struct dirent *)(bmp + empty_dir_ent);
+	dir_entry->ino = f_ino;
+	dir_entry->len = name_len;
+	dir_entry->valid = 1;
+	strncpy(dir_entry->name,fname,name_len);
+	bio_write(dir_inode.direct_ptr[empty_dptr],bmp); // Write temp block to file
 	// Update directory inode
 	dir_inode.vstat.st_mtime = time(NULL);
 	writei(dir_inode.ino,&dir_inode);
@@ -222,7 +225,9 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
 	
 	// tokenize the path with "/" delimiter
     char *token;
-    char path_copy[strlen(path) + 1];
+    char *path_copy = malloc(strlen(path) + 1);
+	if(!path_copy)
+		exit(EXIT_FAILURE);
     strcpy(path_copy, path);
     token = strtok(path_copy, "/");
 
@@ -234,12 +239,14 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
         
         // check if the directory entry was found
         if (dir_find_result != 0) {
-            return ENOENT;
+            free(path_copy);
+			return ENOENT;
         }
         
         // read the inode corresponding to the directory entry
         if (readi(dirent.ino, inode) != 0) {
-            return EIO;
+			free(path_copy);
+			return EIO;
         }
         
         // move to the next token
@@ -248,9 +255,10 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
         // if token is not NULL and inode is not a directory, return error.
 		//  this means that we aren't at the end of the path(token != null), but the inode 
 		//  is not a directory, so we can't traverse further
-        if (token != NULL && (inode->vstat.st_mode & S_ISDIR) == 0) { //S_ISDIR vs S_IFDIR?
+        if (token != NULL && !S_ISDIR(inode->vstat.st_mode)) { //S_ISDIR vs S_IFDIR?
             // Next token is not NULL but current inode is not a directory
-            return ENOTDIR;
+            free(path_copy);
+			return ENOTDIR;
         }
         
         // update ino to the inode of the current directory entry
@@ -259,9 +267,10 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
     
     // read the inode of the terminal point to struct inode *inode
     if (readi(ino, inode) != 0) {
+		free(path_copy);
         return EIO; //return error if unsuccessful
     }
-
+	free(path_copy);
 	return 0;
 }
 
@@ -305,6 +314,7 @@ int rufs_mkfs() {
 	if(root.ino == -1 || root.direct_ptr[0] == -1)
 		return 1;
 	root.type = S_ISDIR;
+	root.vstat.st_mode = S_ISDIR | 0755;
 	root.vstat.st_mtime = time(NULL);
 	root.size = BLOCK_SIZE;
 	root.valid = 1;
@@ -323,6 +333,8 @@ int rufs_mkfs() {
  */
 static void *rufs_init(struct fuse_conn_info *conn) {
 	bmp = calloc(0,BLOCK_SIZE);
+	if(!bmp)
+		exit(EXIT_FAILURE);
 	// Step 1a: If disk file is not found, call mkfs
 	if(dev_open(diskfile_path) != 0) {
 		int err = rufs_mkfs();
@@ -351,7 +363,7 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
 
 	// Step 2: fill attribute of file into stbuf from inode
 
-		stbuf->st_mode   = S_ISDIR | 0755;
+		stbuf->st_mode   = S_IFDIR | 0755;
 		stbuf->st_nlink  = 2;
 		time(&stbuf->st_mtime);
 
