@@ -219,9 +219,52 @@ int get_node_by_path(const char *path, uint16_t ino, struct inode *inode) {
 	
 	// Step 1: Resolve the path name, walk through path, and finally, find its inode.
 	// Note: You could either implement it in a iterative way or recursive way
+	
+	// tokenize the path with "/" delimiter
+    char *token;
+    char path_copy[strlen(path) + 1];
+    strcpy(path_copy, path);
+    token = strtok(path_copy, "/");
+
+	// traverse the path
+    while (token != NULL) {
+        // find the directory entry for the current token
+        struct dirent dirent;
+        int dir_find_result = dir_find(ino, token, strlen(token), &dirent);
+        
+        // check if the directory entry was found
+        if (dir_find_result != 0) {
+            return ENOENT;
+        }
+        
+        // read the inode corresponding to the directory entry
+        if (readi(dirent.ino, inode) != 0) {
+            return EIO;
+        }
+        
+        // move to the next token
+        token = strtok(NULL, "/");
+        
+        // if token is not NULL and inode is not a directory, return error.
+		//  this means that we aren't at the end of the path(token != null), but the inode 
+		//  is not a directory, so we can't traverse further
+        if (token != NULL && (inode->vstat.st_mode & S_ISDIR) == 0) { //S_ISDIR vs S_IFDIR?
+            // Next token is not NULL but current inode is not a directory
+            return ENOTDIR;
+        }
+        
+        // update ino to the inode of the current directory entry
+        ino = dirent.ino;
+    }
+    
+    // read the inode of the terminal point to struct inode *inode
+    if (readi(ino, inode) != 0) {
+        return EIO; //return error if unsuccessful
+    }
 
 	return 0;
 }
+
 
 /* 
  * Make file system
