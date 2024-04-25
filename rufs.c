@@ -291,7 +291,7 @@ int rufs_mkfs() {
 	struct superblock new_sb = { 
 		.magic_num = MAGIC_NUM, 
 		.max_inum = MAX_INUM,
-		.max_dnum = MAX_DNUM - (inum_block_count + 3), // 3 represents the bitmaps and superblock stored before inodes
+		.max_dnum = MAX_DNUM, // 3 represents the bitmaps and superblock stored before inodes
 		.i_bitmap_blk = 1, //0 is superblock, followed by inode bitmap
 		.d_bitmap_blk = 2, //then datablock bitmap
 		.i_start_blk = 3, //then the inodes themselves
@@ -351,6 +351,7 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 	if(dev_open(diskfile_path) != 0) {
 		printf("disk file not found, creating\n");
 		int err = rufs_mkfs();
+		printf("disk file created!");
 		if(err)
 			exit(err); //error making file system, exit
 	} else { 
@@ -359,7 +360,7 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 		if(bio_read(0,bmp) <= 0) // and read superblock from disk
 			exit(EXIT_FAILURE); // error reading, just EXIT
 		sb = *(struct superblock*)bmp;
-		printf("superblock read");
+		printf("superblock read\n");
 	}
 	return NULL;
 }
