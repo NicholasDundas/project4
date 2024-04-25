@@ -318,7 +318,7 @@ int rufs_mkfs() {
 	struct inode root = { 0 };
 	root.ino = get_avail_ino();
 	root.direct_ptr[0] = get_avail_blkno();
-	printf("root.ino == %d, root.direct_ptr[0] == %d",root.ino,root.direct_ptr[0]);
+	printf("root.ino == %d, root.direct_ptr[0] == %d\n",root.ino,root.direct_ptr[0]);
 	if(root.ino == -1 || root.direct_ptr[0] == -1)
 		return 1;
 	root.type = S_IFDIR;
