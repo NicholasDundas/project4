@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-g -Wall -D_FILE_OFFSET_BITS=64
+CFLAGS=-g -Wall -D_FILE_OFFSET_BITS=64 
 LDFLAGS=-lfuse
 
 OBJ=rufs.o block.o
