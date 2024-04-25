@@ -522,6 +522,8 @@ static int rufs_mkdir(const char *path, mode_t mode) {
 	new_dir_inode.size = BLOCK_SIZE;
 	new_dir_inode.valid = 1;
 	new_dir_inode.link = 2; 
+	new_dir_inode.vstat.st_size = new_dir_inode.size;
+	new_dir_inode.vstat.st_nlink = new_dir_inode.link;
 	// Step 6: Call writei() to write inode to disk
 	writei(new_ino,&new_dir_inode);
 	free(path_copy2);
