@@ -27,6 +27,7 @@ char diskfile_path[PATH_MAX];
 // Declare your in-memory data structures here
 struct superblock sb; // stores superblock metadata read during init
 bitmap_t bmp; // bitmap of size BLOCK_SIZE used with bio_read/write operations
+bitmap_t direntbmp; //bitmap for storing a directory entry datablock
 /* 
  * Get available inode number from bitmap
  * Returns -1 if none found
@@ -189,22 +190,24 @@ int dir_add(struct inode dir_inode, uint16_t f_ino, const char *fname, size_t na
 WRITE_DIRENT:
 	if(need_alloc) { //Allocate new datablock for directory
 		dir_inode.direct_ptr[empty_dptr] = get_avail_blkno();
+		dir_inode.size += BLOCK_SIZE;
 		memset(bmp,0,BLOCK_SIZE);
 		empty_dptr = dir_inode.direct_ptr[empty_dptr];
 		empty_dir_ent = 0;
 	} else {
-		bio_read(dir_inode.direct_ptr[empty_dptr],bmp);
+		if(bio_read(dir_inode.direct_ptr[empty_dptr],bmp) <= 0)
+			return EIO;
 	}
 	dir_entry = (struct dirent *)(bmp + empty_dir_ent);
 	dir_entry->ino = f_ino;
 	dir_entry->len = name_len;
 	dir_entry->valid = 1;
 	strncpy(dir_entry->name,fname,name_len);
-	bio_write(dir_inode.direct_ptr[empty_dptr],bmp); // Write temp block to file
+	if(bio_write(dir_inode.direct_ptr[empty_dptr],bmp) <= 0) // Write temp block to file
+		return EIO; 
 	// Update directory inode
 	dir_inode.vstat.st_mtime = time(NULL);
-	writei(dir_inode.ino,&dir_inode);
-	return 0;
+	return writei(dir_inode.ino,&dir_inode);
 }
 
 // Required for 518
@@ -358,6 +361,7 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 	bmp = calloc(0,BLOCK_SIZE);
 	if(!bmp)
 		exit(EXIT_FAILURE);
+	direntbmp = calloc(0,BLOCK_SIZE);
 	printf("bitmap allocated for block io\n"); 
 	// Step 1a: If disk file is not found, call mkfs
 	if(dev_open(diskfile_path) != 0) {
@@ -381,6 +385,7 @@ static void rufs_destroy(void *userdata) {
 	printf("rufs destroy called\n");
 	// Step 1: De-allocate in-memory data structures
 	free(bmp);
+	free(direntbmp);
 	// Step 2: Close diskfile
 	printf("closing diskfile\n");
 	dev_close();
@@ -397,8 +402,12 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
 		return res;
 	// Step 2: fill attribute of file into stbuf from inode
 	printf("success, storing stat\n");
+	inode.vstat.st_atime = time(NULL);
+	inode.vstat.st_mtime = time(NULL);
 	*stbuf = inode.vstat;
-
+	printf("updating inode");
+	writei(inode.ino,&inode);
+	printf("inode updated");
 	return 0;
 }
 
@@ -407,9 +416,12 @@ static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
 	// Step 1: Call get_node_by_path() to get inode from path
 	struct inode inode;
 	int res = get_node_by_path(path,0,&inode);
-	if(res || !S_ISDIR(inode->vstat.st_mode))
+	if(res || !S_ISDIR(inode.vstat.st_mode))
 		return -1;
 	// Step 2: If not find, return -1
+	inode.vstat.st_atime = time(NULL);
+	inode.vstat.st_mtime = time(NULL);
+	writei(inode.ino,&inode);
 	fi->fh = inode.ino;
     return 0;
 }
@@ -417,8 +429,31 @@ static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
 static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 
 	// Step 1: Call get_node_by_path() to get inode from path
-	// Step 2: Read directory entries from its data blocks, and copy them to filler
-	
+	struct inode dir_inode;
+	int res = get_node_by_path(path,0,&dir_inode);
+	if(res || !S_ISDIR(dir_inode.vstat.st_mode))
+		return -1;
+	for (int i = 0; i < 16; i++) {
+		int data_block_idx = dir_inode.direct_ptr[i];
+		if (data_block_idx == 0)
+			continue; //empty direct_ptr, do not search
+		// Step 2: Read directory entries from its data blocks, and copy them to filler
+		if (bio_read(data_block_idx, direntbmp) <= 0)
+			return -1; // error: failed to read directory data block
+
+		// iterate through directory entries in the data block
+		int offset = 0;
+		while (offset < BLOCK_SIZE) {
+			struct dirent *dir_entry = (struct dirent *)(direntbmp + offset);
+			struct inode dir_entry_inode;
+			if(readi(dir_entry->ino,&dir_entry_inode))
+				return -1;
+			if (dir_entry->valid) {
+				filler(buffer,dir_entry->name,&dir_entry_inode.vstat,0);
+			}
+			offset += sizeof(struct dirent);
+		}
+	}
 	return 0;
 }
 
@@ -426,18 +461,50 @@ static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
 static int rufs_mkdir(const char *path, mode_t mode) {
 
 	// Step 1: Use dirname() and basename() to separate parent directory path and target directory name
-
+	char *path_copy = malloc(strlen(path) + 1);
+	char *path_copy2 = malloc(strlen(path) + 1);
+	strcpy(path_copy,path);
+	strcpy(path_copy2,path);
+	char *parent_path = dirname(path_copy);
+	char *directory_name = basename(path_copy2);
 	// Step 2: Call get_node_by_path() to get inode of parent directory
-
+	struct inode parent_inode;
+	int res = get_node_by_path(parent_path,0,&parent_inode);
+	if(res || !S_ISDIR(parent_inode.vstat.st_mode))
+		return -1;
 	// Step 3: Call get_avail_ino() to get an available inode number
-
+	int new_ino = get_avail_ino();
+	if(new_ino == -1)
+		return -1;
 	// Step 4: Call dir_add() to add directory entry of target directory to parent directory
-
+	dir_add(parent_inode,new_ino,directory_name,strlen(directory_name));
 	// Step 5: Update inode for target directory
-
+	struct inode new_dir_inode = { 0 };
+	new_dir_inode.direct_ptr[0] = get_avail_blkno();
+	memset(bmp,0,BLOCK_SIZE);
+	struct dirent *dirents = (struct dirent*)bmp;
+	//. (same) directory
+	dirents->ino = new_ino;
+	dirents->valid = 1;
+	strcpy(dirents->name,".");
+	dirents->len = 1;
+	//.. (parent) directory
+	(dirents+1)->ino = parent_inode.ino;
+	(dirents+1)->valid = 1;
+	strcpy((dirents+1)->name,"..");
+	(dirents+1)->len = 2;	
+	bio_write(new_dir_inode.direct_ptr[0],bmp); //write directory entries to datablock
+	new_dir_inode.ino = new_ino;
+	new_dir_inode.type = S_IFDIR;
+	new_dir_inode.vstat.st_mode = S_IFDIR | 0755;
+	new_dir_inode.vstat.st_mtime = time(NULL);
+	new_dir_inode.size = BLOCK_SIZE;
+	new_dir_inode.valid = 1;
+	new_dir_inode.link = 2; 
 	// Step 6: Call writei() to write inode to disk
-	
-
+	writei(new_ino,&new_dir_inode);
+	free(path_copy2);
+	free(path_copy);
 	return 0;
 }
 
