@@ -326,11 +326,23 @@ int rufs_mkfs() {
 	root.vstat.st_mtime = time(NULL);
 	root.size = BLOCK_SIZE;
 	root.valid = 1;
+	root.link = 2;
 	int err = writei(root.ino,&root);
 	if(err)
 		return err;
 	printf("inode root directory created\n");
 	memset(bmp,0,BLOCK_SIZE);
+	struct dirent *dirents = (struct dirent*)bmp;
+	//. (same) directory
+	dirents->ino = 0;
+	dirents->valid = 1;
+	strcpy(dirents->name,".");
+	dirents->len = 1;
+	//.. (parent) directory
+	(dirents+1)->ino = 0;
+	(dirents+1)->valid = 1;
+	strcpy((dirents+1)->name,"..");
+	(dirents+1)->len = 2;	
 	if(bio_write(root.direct_ptr[0],bmp) <= 0)
 		return 1;
 	printf("inode root directory datablock created\n");
@@ -376,14 +388,16 @@ static void rufs_destroy(void *userdata) {
 }
 
 static int rufs_getattr(const char *path, struct stat *stbuf) {
-
+	printf("rufs getattr called\n");
 	// Step 1: call get_node_by_path() to get inode from path
-
+	struct inode inode;
+	printf("getting node by path\n");
+	int res = get_node_by_path(path,0,&inode);
+	if(res)
+		return res;
 	// Step 2: fill attribute of file into stbuf from inode
-
-		stbuf->st_mode   = S_IFDIR | 0755;
-		stbuf->st_nlink  = 2;
-		time(&stbuf->st_mtime);
+	printf("success, storing stat\n");
+	*stbuf = inode.vstat;
 
 	return 0;
 }
@@ -391,18 +405,20 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
 static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
 
 	// Step 1: Call get_node_by_path() to get inode from path
-
+	struct inode inode;
+	int res = get_node_by_path(path,0,&inode);
+	if(res || !S_ISDIR(inode->vstat.st_mode))
+		return -1;
 	// Step 2: If not find, return -1
-
+	fi->fh = inode.ino;
     return 0;
 }
 
 static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 
 	// Step 1: Call get_node_by_path() to get inode from path
-
 	// Step 2: Read directory entries from its data blocks, and copy them to filler
-
+	
 	return 0;
 }
 
