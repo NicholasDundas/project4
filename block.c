@@ -59,6 +59,7 @@ void dev_close() {
 
 //Read a block from the disk
 int bio_read(const int block_num, void *buf) {
+    printf("bio_read called to blk %d\n", block_num);
     int retstat = 0;
     retstat = pread(diskfile, buf, BLOCK_SIZE, block_num*BLOCK_SIZE);
     if (retstat <= 0) {
@@ -72,6 +73,7 @@ int bio_read(const int block_num, void *buf) {
 
 //Write a block to the disk
 int bio_write(const int block_num, const void *buf) {
+    printf("bio_write called to blk %d\n", block_num);
     int retstat = 0;
     retstat = pwrite(diskfile, buf, BLOCK_SIZE, block_num*BLOCK_SIZE);
     if (retstat < 0) {

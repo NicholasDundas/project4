@@ -27,7 +27,8 @@ char diskfile_path[PATH_MAX];
 // Declare your in-memory data structures here
 struct superblock sb; // stores superblock metadata read during init
 bitmap_t bmp; // bitmap of size BLOCK_SIZE used with bio_read/write operations
-bitmap_t direntbmp; //bitmap for storing a directory entry datablock
+bitmap_t ibmp; // bitmap of size BLOCK_SIZE used with inode read/write operations
+int last_ibmp_blk = -1; // stores last read block (mitigates amount of reads needed for inode ops)
 /* 
  * Get available inode number from bitmap
  * Returns -1 if none found
@@ -84,7 +85,7 @@ int get_avail_blkno() {
  * inode operations
  */
 int readi(uint16_t ino, struct inode *inode) {
-	printf("readi called on %d\n",ino);
+	printf("readi called on ino %d\n",ino);
 	if(ino > sb.max_inum)
 		return 1;
   // Step 1: Get the inode's on-disk block number
@@ -92,15 +93,17 @@ int readi(uint16_t ino, struct inode *inode) {
   // Step 2: Get offset of the inode in the inode on-disk block
 	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
   // Step 3: Read the block from disk and then copy into inode structure
-	if(bio_read(blkno,bmp) <= 0)
-		return -EIO;
-	memcpy(inode,bmp + offset,sizeof(struct inode));
+	if(last_ibmp_blk != blkno)
+		if(bio_read(blkno,ibmp) <= 0)
+			return -EIO;
+	last_ibmp_blk = ino;
+	memcpy(inode,ibmp + offset,sizeof(struct inode));
 	printf("readi done\n");
 	return 0;
 }
 
 int writei(uint16_t ino, struct inode *inode) {
-	printf("writei called on %d\n",ino);
+	printf("writei called on ino %d\n",ino);
 	if(ino > sb.max_inum)
 		return 1;
 	// Step 1: Get the block number where this inode resides on disk
@@ -108,10 +111,12 @@ int writei(uint16_t ino, struct inode *inode) {
 	// Step 2: Get the offset in the block where this inode resides on disk
 	const unsigned int offset = (ino * sizeof(struct inode)) % BLOCK_SIZE;
 	// Step 3: Write inode to disk 
-	if(bio_read(blkno,bmp) <= 0)
-		return -EIO;
-	memcpy(bmp + offset,inode,sizeof(struct inode));
-	if(bio_write(blkno,bmp) <= 0)
+	if(last_ibmp_blk != blkno)
+		if(bio_read(blkno,ibmp) <= 0)
+			return -EIO;
+	last_ibmp_blk = blkno;
+	memcpy(ibmp + offset,inode,sizeof(struct inode));
+	if(bio_write(blkno,ibmp) <= 0)
 		return -EIO;
 	printf("writei done\n");
 	return 0;
@@ -377,8 +382,8 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 	bmp = calloc(BLOCK_SIZE,1);
 	if(!bmp)
 		exit(EXIT_FAILURE);
-	direntbmp = calloc(BLOCK_SIZE,1);
-	if(!direntbmp)
+	ibmp = calloc(BLOCK_SIZE,1);
+	if(!ibmp)
 		exit(EXIT_FAILURE);
 	printf("bitmaps allocated\n"); 
 	// Step 1a: If disk file is not found, call mkfs
@@ -403,7 +408,7 @@ static void rufs_destroy(void *userdata) {
 	printf("rufs destroy called\n");
 	// Step 1: De-allocate in-memory data structures
 	free(bmp);
-	free(direntbmp);
+	free(ibmp);
 	// Step 2: Close diskfile
 	printf("closing diskfile\n");
 	dev_close();
@@ -458,13 +463,13 @@ static int rufs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
 		if (data_block_idx == 0)
 			continue; //empty direct_ptr, do not search
 		// Step 2: Read directory entries from its data blocks, and copy them to filler
-		if (bio_read(data_block_idx, direntbmp) <= 0)
+		if (bio_read(data_block_idx, bmp) <= 0)
 			return -1; // error: failed to read directory data block
 
 		// iterate through directory entries in the data block
 		int offset = 0;
 		while (offset + sizeof(struct dirent) < BLOCK_SIZE) {
-			struct dirent *dir_entry = (struct dirent *)(direntbmp + offset);
+			struct dirent *dir_entry = (struct dirent *)(bmp + offset);
 			struct inode dir_entry_inode;
 			if (dir_entry->valid) {
 				if(readi(dir_entry->ino,&dir_entry_inode))
