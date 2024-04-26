@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
 
 	int i, fd = 0, ret = 0;
 	struct stat st;
-/*
+
 	if ((fd = creat(TESTDIR "/file", FILEPERM)) < 0) {
 		perror("creat");
 		printf("TEST 1: File create failure \n");
@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
 	printf("TEST 1: File create Success \n");
 
 
-	/* Perform sequential writes 
+	/* Perform sequential writes */
 	for (i = 0; i < ITERS; i++) {
 		//memset with some random data
 		memset(buf, 0x61 + i, BLOCKSIZE);
@@ -52,21 +52,21 @@ int main(int argc, char **argv) {
 	printf("TEST 2: File write Success \n");
 
 
-	/*Close operation
+	/*Close operation*/	
 	if (close(fd) < 0) {
 		printf("TEST 3: File close failure \n");
 	}
 	printf("TEST 3: File close Success \n");
 
 
-	/* Open for reading 
+	/* Open for reading */
 	if ((fd = open(TESTDIR "/file", FILEPERM)) < 0) {
 		perror("open");
 		exit(1);
 	}
 
 
-	/* Perform sequential reading 
+	/* Perform sequential reading */
 	for (i = 0; i < ITERS; i++) {
 		//clear buffer
 		memset(buf, 0, BLOCKSIZE);
@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     
 	printf("TEST 4: File read Success \n");
 	close(fd);
-	*/
+
 	/* Directory creation test */
 	if ((ret = mkdir(TESTDIR "/files", DIRPERM)) < 0) {
 		perror("mkdir");
