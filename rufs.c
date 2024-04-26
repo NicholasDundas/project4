@@ -524,8 +524,8 @@ static int rufs_mkdir(const char *path, mode_t mode) {
 		return -1;
 	// printf(". & .. added\n");
 	new_dir_inode.ino = new_ino;
-	new_dir_inode.type = S_IFDIR | 0755;
-	new_dir_inode.vstat.st_mode = S_IFDIR | 0755;
+	new_dir_inode.type = S_IFDIR | mode;
+	new_dir_inode.vstat.st_mode = S_IFDIR | mode;
 	new_dir_inode.vstat.st_mtime = time(NULL);
 	new_dir_inode.size = BLOCK_SIZE;
 	new_dir_inode.valid = 1;
@@ -586,8 +586,8 @@ static int rufs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	// Step 5: Update inode for target file
 	struct inode new_file_inode = { 0 };
 	new_file_inode.ino = new_ino;
-	new_file_inode.type = S_IFREG | 0644;
-	new_file_inode.vstat.st_mode = S_IFREG | 0644;
+	new_file_inode.type = S_IFREG | mode;
+	new_file_inode.vstat.st_mode = S_IFREG | mode;
 	new_file_inode.vstat.st_mtime = time(NULL);
 	new_file_inode.vstat.st_size = 0;
 	new_file_inode.size = 0;
