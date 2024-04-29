@@ -442,6 +442,7 @@ static int rufs_opendir(const char *path, struct fuse_file_info *fi) {
 	// Step 2: If not find, return -1
 	// printf("got inode, writing updated access\n");
 	inode.vstat.st_mtime = time(NULL);
+	inode.vstat.st_atime = inode.vstat.st_mtime;
 	if(writei(inode.ino,&inode))
 		return -1;
 	fi->fh = inode.ino;
