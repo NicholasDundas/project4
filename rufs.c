@@ -23,7 +23,6 @@
 #include "rufs.h"
 
 char diskfile_path[PATH_MAX];
-int datablocks_used = 0;
 // Declare your in-memory data structures here
 struct superblock sb; // stores superblock metadata read during init
 bitmap_t bmp; // bitmap of size BLOCK_SIZE used with bio_read/write operations
@@ -70,7 +69,6 @@ int get_avail_blkno() {
 		}
 	// Step 3: Update data block bitmap and write to disk 
 	if(blkno != -1) {
-		datablocks_used++;
 		set_bitmap(bmp,blkno);
 		if(bio_write(sb.d_bitmap_blk,bmp) <= 0)
 			return -2;
@@ -347,6 +345,8 @@ int rufs_mkfs() {
 	root.vstat.st_nlink = 2;
 	root.size = BLOCK_SIZE;
 	root.vstat.st_size = root.size;
+	root.vstat.st_uid = getuid();
+	root.vstat.st_gid = getgid();
 	root.valid = 1;
 	root.link = 2;
 	int err = writei(root.ino,&root);
@@ -364,6 +364,7 @@ int rufs_mkfs() {
 	(dirents+1)->ino = 0;
 	(dirents+1)->valid = 1;
 	strcpy((dirents+1)->name,"..");
+
 	(dirents+1)->len = 2;	
 	if(bio_write(root.direct_ptr[0],bmp) <= 0)
 		return 1;
@@ -405,7 +406,6 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 static void rufs_destroy(void *userdata) {
 	// printf("rufs destroy called\n");
 	// Step 1: De-allocate in-memory data structures
-	printf("datablocks used: %d\n",datablocks_used);
 	free(bmp);
 	free(ibmp);
 	// Step 2: Close diskfile
@@ -423,7 +423,8 @@ static int rufs_getattr(const char *path, struct stat *stbuf) {
 		return res;
 	// Step 2: fill attribute of file into stbuf from inode
 	// printf("success, storing stat\n");
-	inode.vstat.st_mtime = time(NULL);
+	inode.vstat.st_atime = time(NULL);
+	inode.vstat.st_mtime = inode.vstat.st_atime;
 	*stbuf = inode.vstat;
 	// printf("updating inode\n");
 	writei(inode.ino,&inode);
@@ -534,6 +535,8 @@ static int rufs_mkdir(const char *path, mode_t mode) {
 	new_dir_inode.link = 2; 
 	new_dir_inode.vstat.st_size = new_dir_inode.size;
 	new_dir_inode.vstat.st_nlink = new_dir_inode.link;
+	new_dir_inode.vstat.st_uid = getuid();
+	new_dir_inode.vstat.st_gid = getgid();
 	// Step 6: Call writei() to write inode to disk
 	free(path_copy2);
 	free(path_copy);
@@ -597,6 +600,8 @@ static int rufs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	new_file_inode.link = 1; 
 	new_file_inode.vstat.st_size = new_file_inode.size;
 	new_file_inode.vstat.st_nlink = new_file_inode.link;
+	new_file_inode.vstat.st_uid = getuid();
+	new_file_inode.vstat.st_gid = getgid();
 	// Step 6: Call writei() to write inode to disk
 	free(path_copy2);
 	free(path_copy);
@@ -613,6 +618,7 @@ static int rufs_open(const char *path, struct fuse_file_info *fi) {
 	// Step 2: If not find, return -1
 	// printf("got inode, writing updated access\n");
 	inode.vstat.st_mtime = time(NULL);
+	inode.vstat.st_atime = inode.vstat.st_mtime;
 	if(writei(inode.ino,&inode))
 		return -1;
 	fi->fh = inode.ino;
