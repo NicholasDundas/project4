@@ -8,4 +8,4 @@ simple_test:
 test_case:
 	$(CC) $(CFLAGS) -o test_case test_cases.c
 clean:
-	rm -rf barebones_case simple_test test_case
+	rm -rf simple_test test_case

@@ -23,7 +23,7 @@
 #include "rufs.h"
 
 char diskfile_path[PATH_MAX];
-
+int datablocks_used = 0;
 // Declare your in-memory data structures here
 struct superblock sb; // stores superblock metadata read during init
 bitmap_t bmp; // bitmap of size BLOCK_SIZE used with bio_read/write operations
@@ -70,6 +70,7 @@ int get_avail_blkno() {
 		}
 	// Step 3: Update data block bitmap and write to disk 
 	if(blkno != -1) {
+		datablocks_used++;
 		set_bitmap(bmp,blkno);
 		if(bio_write(sb.d_bitmap_blk,bmp) <= 0)
 			return -2;
@@ -404,6 +405,7 @@ static void *rufs_init(struct fuse_conn_info *conn) {
 static void rufs_destroy(void *userdata) {
 	// printf("rufs destroy called\n");
 	// Step 1: De-allocate in-memory data structures
+	printf("datablocks used: %d\n",datablocks_used);
 	free(bmp);
 	free(ibmp);
 	// Step 2: Close diskfile
